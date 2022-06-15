@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>pdfjs example</title>
+</head>
+<body>
+
+<hr>
+<div id="view"></div>
+<hr>
+
+<script src="./node_modules/pdfjs-dist/legacy/build/pdf.js"></script>
+<style>
+.container {
+  position: relative;
+}
+.page {
+  position: relative;
+  margin-bottom: 20px;
+}
+.page > .wrap {
+  margin: 0 auto;
+  position: relative;
+  box-shadow: 2px 2px 8px 0px rgba(0, 0, 0, .2);
+}
+.page > .wrap > .canvas-layer {
+  position: relative;
+}
+.page > .wrap > .canvas-layer > canvas {
+  display: block;
+}
+.page > .wrap > .text-layer,
+.page > .wrap > .annotation-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  line-height: 1;
+}
+.page > .wrap > .text-layer span {
+  color: transparent;
+  position: absolute;
+  cursor: text;
+  white-space: pre;
+}
+</style>
+<script id="script">
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  './node_modules/pdfjs-dist/legacy/build/pdf.worker.js';
+
+const createPageContainer = (viewport) => {
+  const container = document.createElement('div');
+  container.className = 'page';
+
+  const wrap = document.createElement('div');
+  wrap.className = 'wrap';
+  wrap.style.width = `${viewport.width}px`;
+
+  const canvasLayer = document.createElement('div');
+  canvasLayer.className = 'canvas-layer';
+  wrap.appendChild(canvasLayer);
+
+  const textLayer = document.createElement('div');
+  textLayer.className = 'text-layer';
+  textLayer.style.width = `${viewport.width}px`;
+  textLayer.style.height = `${viewport.height}px`;
+  wrap.appendChild(textLayer);
+
+  const annotationLayer = document.createElement('div');
+  annotationLayer.className = 'canvas-layer';
+  wrap.appendChild(annotationLayer);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  canvasLayer.appendChild(canvas);
+
+  container.appendChild(wrap);
+  return container;
+};
+
+const loadPage = async (container, pdf, num) => {
+  const page = await pdf.getPage(num);
+  const initViewport = page.getViewport({ scale: 1.0 });
+
+  const containerWidth = container.clientWidth;
+  const pageWidth = initViewport.width;
+  const viewport = containerWidth > pageWidth
+    ? initViewport
+    : page.getViewport({ scale: containerWidth / pageWidth });
+
+  return { num, page, viewport };
+};
+
+const renderPage = async (container, page, viewport) => {
+  const canvas = container.querySelector('canvas');
+  const canvasContext = canvas.getContext('2d');
+  const textLayer = container.querySelector('.text-layer');
+  const annotationLayer = container.querySelector('.annotation-layer');
+
+  const canvasRenderTask = page.render({
+    canvasContext,
+    viewport: viewport,
+  });
+  await canvasRenderTask.promise;
+
+  const textContent = await page.getTextContent();
+  const textRenderTask = pdfjsLib.renderTextLayer({
+    textContent,
+    container: textLayer,
+    viewport: viewport,
+    textDivs: [],
+  });
+  await textRenderTask.promise;
+
+  // const annotations = await page.getAnnotations();
+
+  return { canvas, textContent };
+};
+
+async function* craetePageLoader(container, pdf) {
+  for (let i = 1; i <= pdf.numPages; i++) {
+    yield await loadPage(container, pdf, i);
+  }
+}
+
+const gap = 20;
+(async () => {
+  const container = document.getElementById('view');
+  const url = new URL(window.location.href);
+  const w = +url.searchParams.get('width');
+  if (w) container.style.width = `${w}px`;
+
+  console.time('request pdf');
+  const requestTask = pdfjsLib.getDocument('./test.pdf');
+  const pdf = await requestTask.promise;
+  console.timeEnd('request pdf');
+
+  const cache = new Map();
+  // offset y
+  let y = 0;
+
+  console.time('load pdf pages');
+  for await (let pageResult of craetePageLoader(container, pdf)) {
+    const { num, page, viewport } = pageResult;
+    cache.set(num, { page, viewport, y });
+    y = y + viewport.height + gap;
+  }
+  console.timeEnd('load pdf pages');
+
+  const promises = [];
+  
+  console.time('render pages');
+  container.style.height = `${y}px`;
+  for (let num = 1; num <= pdf.numPages; num++) {
+    const { page, viewport } = cache.get(num);
+    const dom = createPageContainer(viewport);
+    container.append(dom);
+    promises.push(renderPage(dom, page, viewport));
+  }
+  await Promise.all(promises);
+  console.timeEnd('render pages');
+})();
+</script>
+</body>
+</html>
